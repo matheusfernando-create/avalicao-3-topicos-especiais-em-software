@@ -14,6 +14,13 @@ URL_BASE = "https://scrapingsandbox.com/product/"
 # Quantidade de produtos (páginas) que serão coletados
 TOTAL_PRODUTOS = 200
 
+# Tempo máximo (em segundos) de espera pela resposta do site
+TEMPO_LIMITE = 10
+
+# Guarda os produtos já coletados. Assim o Web Scraping é feito
+# apenas na primeira pesquisa e as próximas ficam instantâneas.
+produtos_coletados = []
+
 
 # ==========================================================
 # COLETA DE UM PRODUTO
@@ -25,8 +32,14 @@ def coletar_produto(sessao, id_produto):
     # https://scrapingsandbox.com/product/100
     url = f"{URL_BASE}{id_produto}"
 
-    # Realiza a requisição para o site
-    resposta = sessao.get(url)
+    # Realiza a requisição para o site.
+    # Se houver erro de conexão ou demora, ignora este produto
+    # em vez de interromper a aplicação.
+    try:
+        resposta = sessao.get(url, timeout=TEMPO_LIMITE)
+    except requests.RequestException:
+        print(f"Erro ao acessar {url}")
+        return None
 
     # Se não conseguimos acessar a página, ignora este produto
     if resposta.status_code != 200:
@@ -46,12 +59,21 @@ def coletar_produto(sessao, id_produto):
     if titulo is None or tag_categoria is None or tag_preco is None:
         return None
 
-    # Converte o preço de texto ("$51.11") para número (51.11)
-    preco = float(tag_preco.get_text(strip=True).replace("$", "").replace(",", ""))
+    # Converte o preço de texto ("$51.11") para número (51.11).
+    # Se o texto vier em um formato inesperado, ignora este produto
+    try:
+        preco = float(tag_preco.get_text(strip=True).replace("$", "").replace(",", ""))
+    except ValueError:
+        return None
 
     # Localiza a avaliação. Pode não existir em alguns produtos
     tag_avaliacao = soup.select_one("span.text-sm.font-mono.font-semibold")
-    avaliacao = float(tag_avaliacao.get_text(strip=True)) if tag_avaliacao else None
+    avaliacao = None
+    if tag_avaliacao:
+        try:
+            avaliacao = float(tag_avaliacao.get_text(strip=True))
+        except ValueError:
+            avaliacao = None
 
     # Cada produto é representado por um dicionário
     return {
@@ -66,6 +88,12 @@ def coletar_produto(sessao, id_produto):
 # ==========================================================
 # COLETA DE VÁRIOS PRODUTOS (PAGINAÇÃO)
 # ==========================================================
+# Na listagem do Scraping Sandbox, os botões de página (1, 2, 3...)
+# funcionam com JavaScript: o endereço "/?page=2" devolve os mesmos
+# produtos da primeira página. Por isso a paginação é feita pelas
+# páginas de cada produto, que seguem uma sequência numérica:
+#   /product/1, /product/2, /product/3, ...
+# Cada número é uma página diferente do site.
 def coletar_produtos(total=TOTAL_PRODUTOS):
     # Lista que armazenará os produtos coletados
     produtos = []
@@ -103,8 +131,12 @@ def pesquisar():
     # Recebe a categoria escolhida no formulário
     categoria = request.form.get("categoria")
 
-    # Realiza o Web Scraping das páginas de produto
-    produtos = coletar_produtos()
+    # Realiza o Web Scraping somente se os produtos ainda não foram coletados.
+    # "global" permite alterar a variável criada fora da função
+    global produtos_coletados
+    if not produtos_coletados:
+        produtos_coletados = coletar_produtos()
+    produtos = produtos_coletados
 
     # Lista que armazenará somente os produtos da categoria escolhida
     produtos_filtrados = []
